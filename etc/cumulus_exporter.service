@@ -1,0 +1,8 @@
+[Unit]
+Description=Cumulus exporter for prometheus
+
+[Service]
+ExecStart=/usr/bin/cumulus_exporter
+
+[Install]
+WantedBy=multi-user.target
