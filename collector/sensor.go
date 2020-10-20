@@ -12,7 +12,7 @@ import (
 var (
 	sensorSubsystem = "sensor"
 
-	sensorLabels = []string{"sensor"}
+	sensorLabels = []string{"sensor", "description"}
 
 	sensorDesc = map[string]*prometheus.Desc{
 		"state":       colPromDesc(sensorSubsystem, "state", "State of Sensor (0 = Bad, 1 = Ok, 2 = Absent).", sensorLabels),
@@ -102,7 +102,7 @@ func processSensorStats(ch chan<- prometheus.Metric, jsonSensorSum []byte) error
 	}
 
 	for _, sensor := range jsonSensors {
-		labels := []string{strings.ToLower(sensor.Name)}
+		labels := []string{strings.ToLower(sensor.Name), strings.ToLower(sensor.Description)}
 
 		if strings.ToLower(sensor.State) == "ok" {
 			newGauge(ch, sensorDesc["state"], 1.0, labels...)
@@ -129,6 +129,7 @@ func processSensorStats(ch chan<- prometheus.Metric, jsonSensorSum []byte) error
 
 type sensorData []struct {
 	Name  string  `json:"name"`
+	Description string `json:"description"`
 	State string  `json:"state"`
 	Input float64 `json:"input,omitempty"`
 	Type  string  `json:"type"`
