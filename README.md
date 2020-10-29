@@ -57,6 +57,7 @@ Name | Description
 --- | ---
 Sensors | Temperature, fan speed, etc.
 Resources | Hardware resources utilisation, such as IPv4/IPv6 host entries, ACL entries, etc.
+Version | Cumulus Linux version as identified in `/etc/lsb-release`.
 
 ## Development
 ### Building
