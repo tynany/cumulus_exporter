@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
+	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
 var (
@@ -19,70 +20,42 @@ var (
 		"used": colPromDesc(resourceSubsystem, "used", "Resource Used.", resourceLabels),
 	}
 
-	resourceErrors      = []error{}
 	totalResourceErrors = 0.0
+
+	cumulusCLResPath = kingpin.Flag("cumulus.cl-resource-query.path", "Path of cl-resource-query.").Default("/usr/cumulus/bin/cl-resource-query").String()
 )
 
-// ResourceCollector collects Resource metrics, implemented as per prometheus.Collector interface.
+func init() {
+	registerCollector(resourceSubsystem, enabledByDefault, NewResourceCollector)
+}
+
+// ResourceCollector collects resource metrics, implemented as per the Collector interface.
 type ResourceCollector struct{}
 
-// NewResourceCollector returns a ResourceCollector struct.
-func NewResourceCollector() *ResourceCollector {
+// NewResourceCollector returns a new ResourceCollector.
+func NewResourceCollector() Collector {
 	return &ResourceCollector{}
 }
 
-// Name of the collector. Used to populate flag name.
-func (*ResourceCollector) Name() string {
-	return resourceSubsystem
-}
-
-// Help describes the metrics this collector scrapes. Used to populate flag help.
-func (*ResourceCollector) Help() string {
-	return "Collect Resource Metrics"
-}
-
-// EnabledByDefault describes whether this collector is enabled by default. Used to populate flag default.
-func (*ResourceCollector) EnabledByDefault() bool {
-	return true
-}
-
-// Describe implemented as per the prometheus.Collector interface.
-func (*ResourceCollector) Describe(ch chan<- *prometheus.Desc) {
-	for _, desc := range resourceDesc {
-		ch <- desc
-	}
-}
-
-// Collect implemented as per the prometheus.Collector interface.
-func (c *ResourceCollector) Collect(ch chan<- prometheus.Metric) {
+// Get metrics and send to the Prometheus.Metric channel.
+func (c *ResourceCollector) Get(ch chan<- prometheus.Metric) (float64, error) {
 
 	jsonResources, err := getResourceStats()
 	if err != nil {
 		totalResourceErrors++
-		resourceErrors = append(resourceErrors, fmt.Errorf("cannot get resources: %s", err))
-	} else {
-		if err := processResourceStats(ch, jsonResources); err != nil {
-			totalResourceErrors++
-			resourceErrors = append(resourceErrors, err)
-		}
+		return totalResourceErrors, fmt.Errorf("cannot get resources: %s", err)
 	}
-}
+	if err := processResourceStats(ch, jsonResources); err != nil {
+		totalResourceErrors++
+		return totalResourceErrors, err
+	}
+	return totalResourceErrors, nil
 
-// CollectErrors returns what errors have been gathered.
-func (*ResourceCollector) CollectErrors() []error {
-	errors := resourceErrors
-	resourceErrors = []error{}
-	return errors
-}
-
-// CollectTotalErrors returns total errors.
-func (*ResourceCollector) CollectTotalErrors() float64 {
-	return totalResourceErrors
 }
 
 func getResourceStats() ([]byte, error) {
 	args := []string{"-j"}
-	output, err := exec.Command(clResourceQueryPath, args...).Output()
+	output, err := exec.Command(*cumulusCLResPath, args...).Output()
 	if err != nil {
 		return nil, err
 	}

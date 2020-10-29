@@ -1,15 +1,23 @@
 package collector
 
 import (
+	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/log"
+	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
-// The namespace used by all metrics.
-const namespace = "cumulus"
+const (
+	// The namespace used by all metrics.
+	namespace = "cumulus"
+
+	enabledByDefault  = true
+	disabledByDefault = false
+)
 
 var (
 	cumulusTotalScrapeCount = 0.0
@@ -22,101 +30,80 @@ var (
 		"collectorUp":    promDesc("collector_up", "Whether the collector's last scrape was successful (1 = successful, 0 = unsuccessful).", cumulusLabels),
 	}
 
-	smonctlPath         string
-	clResourceQueryPath string
+	allCollectors  = make(map[string]func() Collector)
+	collectorState = make(map[string]*bool)
 )
 
-// CLIHelper is used to populate flags.
-type CLIHelper interface {
-	// What the collector does.
-	Help() string
-
-	// Name of the collector.
-	Name() string
-
-	// Whether or not the collector is enabled by default.
-	EnabledByDefault() bool
-}
-
-// CollectErrors is used to collect collector errors.
-type CollectErrors interface {
-	// Returns any errors that were encounted during Collect.
-	CollectErrors() []error
-
-	// Returns the total number of errors encounter during app run duration.
-	CollectTotalErrors() float64
-}
-
-// Exporters contains a slice of Collectors.
-type Exporters struct {
-	Collectors []*Collector
-}
-
-// Collector contains everything needed to collect from a collector.
-type Collector struct {
-	Enabled       *bool
-	Name          string
-	PromCollector prometheus.Collector
-	Errors        CollectErrors
-	CLIHelper     CLIHelper
-}
-
-// NewExporter returns an Exporters type containing a slice of Collectors.
-func NewExporter(collectors []*Collector) *Exporters {
-	return &Exporters{Collectors: collectors}
-}
-
-// SetSMONCTLPath sets the path of smonctl.
-func (e *Exporters) SetSMONCTLPath(path string) {
-	smonctlPath = path
-}
-
-// SetCLResPath sets the path of cl-resource-query.
-func (e *Exporters) SetCLResPath(path string) {
-	clResourceQueryPath = path
-}
-
-// Describe implemented as per the prometheus.Collector interface.
-func (e *Exporters) Describe(ch chan<- *prometheus.Desc) {
-	for _, desc := range sensorDesc {
-		ch <- desc
+func registerCollector(name string, enabledByDefault bool, collector func() Collector) {
+	defaultState := "disabled"
+	if enabledByDefault {
+		defaultState = "enabled"
 	}
-	for _, collector := range e.Collectors {
-		collector.PromCollector.Describe(ch)
+
+	allCollectors[name] = collector
+	collectorState[name] = kingpin.Flag(fmt.Sprintf("collector.%s", name), fmt.Sprintf("Enable the %s collector (default: %s).", name, defaultState)).Default(strconv.FormatBool(enabledByDefault)).Bool()
+}
+
+// Collector is the interface a collector has to implement.
+type Collector interface {
+	// Gets metrics and sends to the Prometheus.Metric channel.
+	Get(ch chan<- prometheus.Metric) (float64, error)
+}
+
+// Exporter collects all collector metrics, implemented as per the prometheus.Collector interface.
+type Exporter struct {
+	Collectors map[string]Collector
+}
+
+// NewExporter returns a new Exporter.
+func NewExporter() *Exporter {
+	enabledCollectors := make(map[string]Collector)
+	for name, collector := range allCollectors {
+		if *collectorState[name] {
+			enabledCollectors[name] = collector()
+		}
+	}
+	return &Exporter{
+		Collectors: enabledCollectors,
 	}
 }
 
 // Collect implemented as per the prometheus.Collector interface.
-func (e *Exporters) Collect(ch chan<- prometheus.Metric) {
+func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	cumulusTotalScrapeCount++
 	ch <- prometheus.MustNewConstMetric(cumulusDesc["scrapesTotal"], prometheus.CounterValue, cumulusTotalScrapeCount)
 
 	wg := &sync.WaitGroup{}
-	for _, collector := range e.Collectors {
+	for name, collector := range e.Collectors {
 		wg.Add(1)
-		go runCollector(ch, collector, wg)
+		go runCollector(ch, name, collector, wg)
 	}
 	wg.Wait()
 }
 
-func runCollector(ch chan<- prometheus.Metric, collector *Collector, wg *sync.WaitGroup) {
+func runCollector(ch chan<- prometheus.Metric, name string, collector Collector, wg *sync.WaitGroup) {
 	defer wg.Done()
+
 	startTime := time.Now()
+	totalErrors, err := collector.Get(ch)
 
-	collector.PromCollector.Collect(ch)
+	ch <- prometheus.MustNewConstMetric(cumulusDesc["scrapeDuration"], prometheus.GaugeValue, float64(time.Since(startTime).Seconds()), name)
+	ch <- prometheus.MustNewConstMetric(cumulusDesc["scrapeErrTotal"], prometheus.GaugeValue, totalErrors, name)
 
-	ch <- prometheus.MustNewConstMetric(cumulusDesc["scrapeErrTotal"], prometheus.GaugeValue, collector.Errors.CollectTotalErrors(), collector.Name)
-
-	errors := collector.Errors.CollectErrors()
-	if len(errors) > 0 {
-		ch <- prometheus.MustNewConstMetric(cumulusDesc["collectorUp"], prometheus.GaugeValue, 0, collector.Name)
-		for _, err := range errors {
-			log.Errorf("collector \"%s\" scrape failed: %s", collector.Name, err)
-		}
+	if err != nil {
+		ch <- prometheus.MustNewConstMetric(cumulusDesc["collectorUp"], prometheus.GaugeValue, 0, name)
+		log.Errorf("collector %q scrape failed: %s", name, err)
 	} else {
-		ch <- prometheus.MustNewConstMetric(cumulusDesc["collectorUp"], prometheus.GaugeValue, 1, collector.Name)
+		ch <- prometheus.MustNewConstMetric(cumulusDesc["collectorUp"], prometheus.GaugeValue, 1, name)
 	}
-	ch <- prometheus.MustNewConstMetric(cumulusDesc["scrapeDuration"], prometheus.GaugeValue, float64(time.Since(startTime).Seconds()), collector.Name)
+
+}
+
+// Describe implemented as per the prometheus.Collector interface.
+func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
+	for _, desc := range cumulusDesc {
+		ch <- desc
+	}
 }
 
 func promDesc(metricName string, metricDescription string, labels []string) *prometheus.Desc {

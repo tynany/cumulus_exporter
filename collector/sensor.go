@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
+	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
 var (
@@ -24,70 +25,40 @@ var (
 		"maxFanSpeed": colPromDesc(sensorSubsystem, "maximum_operating_fan_speed_rpm", "Maximum Operating Fan Speed RPM.", sensorLabels),
 	}
 
-	sensorErrors      = []error{}
 	totalSensorErrors = 0.0
+
+	cumulusSMONCTLPath = kingpin.Flag("cumulus.smonctl.path", "Path of smonctl.").Default("/usr/sbin/smonctl").String()
 )
 
-// SensorCollector collects Sensor metrics, implemented as per prometheus.Collector interface.
+func init() {
+	registerCollector(sensorSubsystem, enabledByDefault, NewSensorCollector)
+}
+
+// SensorCollector collects sensor metrics, implemented as per the Collector interface.
 type SensorCollector struct{}
 
-// NewSensorCollector returns a SensorCollector struct.
-func NewSensorCollector() *SensorCollector {
+// NewSensorCollector returns a new SensorCollector.
+func NewSensorCollector() Collector {
 	return &SensorCollector{}
 }
 
-// Name of the collector. Used to populate flag name.
-func (*SensorCollector) Name() string {
-	return sensorSubsystem
-}
-
-// Help describes the metrics this collector scrapes. Used to populate flag help.
-func (*SensorCollector) Help() string {
-	return "Collect Sensor Metrics"
-}
-
-// EnabledByDefault describes whether this collector is enabled by default. Used to populate flag default.
-func (*SensorCollector) EnabledByDefault() bool {
-	return true
-}
-
-// Describe implemented as per the prometheus.Collector interface.
-func (*SensorCollector) Describe(ch chan<- *prometheus.Desc) {
-	for _, desc := range sensorDesc {
-		ch <- desc
-	}
-}
-
-// Collect implemented as per the prometheus.Collector interface.
-func (c *SensorCollector) Collect(ch chan<- prometheus.Metric) {
-
+// Get metrics and send to the Prometheus.Metric channel.
+func (c *SensorCollector) Get(ch chan<- prometheus.Metric) (float64, error) {
 	jsonSensors, err := getSensorStats()
 	if err != nil {
 		totalSensorErrors++
-		sensorErrors = append(sensorErrors, fmt.Errorf("cannot get sensors: %s", err))
-	} else {
-		if err := processSensorStats(ch, jsonSensors); err != nil {
-			totalSensorErrors++
-			sensorErrors = append(sensorErrors, err)
-		}
+		return totalSensorErrors, fmt.Errorf("cannot get sensors: %s", err)
 	}
-}
-
-// CollectErrors returns what errors have been gathered.
-func (*SensorCollector) CollectErrors() []error {
-	errors := sensorErrors
-	sensorErrors = []error{}
-	return errors
-}
-
-// CollectTotalErrors returns total errors.
-func (*SensorCollector) CollectTotalErrors() float64 {
-	return totalSensorErrors
+	if err := processSensorStats(ch, jsonSensors); err != nil {
+		totalSensorErrors++
+		return totalSensorErrors, err
+	}
+	return totalSensorErrors, nil
 }
 
 func getSensorStats() ([]byte, error) {
 	args := []string{"-j"}
-	output, err := exec.Command(smonctlPath, args...).Output()
+	output, err := exec.Command(*cumulusSMONCTLPath, args...).Output()
 	if err != nil {
 		return nil, err
 	}
@@ -128,11 +99,11 @@ func processSensorStats(ch chan<- prometheus.Metric, jsonSensorSum []byte) error
 }
 
 type sensorData []struct {
-	Name  string  `json:"name"`
-	Description string `json:"description"`
-	State string  `json:"state"`
-	Input float64 `json:"input,omitempty"`
-	Type  string  `json:"type"`
-	Max   float64 `json:"max,omitempty"`
-	Min   float64 `json:"min,omitempty"`
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	State       string  `json:"state"`
+	Input       float64 `json:"input,omitempty"`
+	Type        string  `json:"type"`
+	Max         float64 `json:"max,omitempty"`
+	Min         float64 `json:"min,omitempty"`
 }
