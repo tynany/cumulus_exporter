@@ -70,7 +70,7 @@ func processResourceStats(ch chan<- prometheus.Metric, jsonResourceSum []byte) e
 
 	for _, v := range dataMap {
 	        newGauge(ch, resourceDesc["max"], v.Max, strings.ToLower(v.Name))
-	        newGauge(ch, resourceDesc["used"], v.Max, strings.ToLower(v.Name))
+	        newGauge(ch, resourceDesc["used"], v.Count, strings.ToLower(v.Name))
 	}
 
 	return nil
