@@ -75,7 +75,7 @@ func processSensorStats(ch chan<- prometheus.Metric, jsonSensorSum []byte) error
 	for _, sensor := range jsonSensors {
 		labels := []string{strings.ToLower(sensor.Name), strings.ToLower(sensor.Description)}
 
-		if strings.ToLower(sensor.State) == "ok" {
+		if st := strings.ToLower(sensor.State); st == "ok" || st == "high" {
 			newGauge(ch, sensorDesc["state"], 1.0, labels...)
 
 			if sensor.Type == "fan" {
