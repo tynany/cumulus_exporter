@@ -85,6 +85,8 @@ func processSensorStats(ch chan<- prometheus.Metric, jsonSensorSum []byte) error
 			newGauge(ch, sensorDesc["state"], 2.0, labels...)
 		} else {
 			newGauge(ch, sensorDesc["state"], 0.0, labels...)
+			// Best effort attempt to get metrcs in a bad state
+			sensorMetrics(ch, sensor, labels)
 		}
 	}
 	return nil
