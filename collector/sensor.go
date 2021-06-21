@@ -16,7 +16,7 @@ var (
 	sensorLabels = []string{"sensor", "description"}
 
 	sensorDesc = map[string]*prometheus.Desc{
-		"state":       colPromDesc(sensorSubsystem, "state", "State of Sensor (0 = Bad, 1 = Ok, 2 = Absent).", sensorLabels),
+		"state":       colPromDesc(sensorSubsystem, "state", "State of Sensor (0 = Bad, 1 = Ok, 2 = Absent, 3 = High).", sensorLabels),
 		"temp":        colPromDesc(sensorSubsystem, "temperature_celsius", "Temperature in Celsius.", sensorLabels),
 		"fanSpeed":    colPromDesc(sensorSubsystem, "fan_speed_rpm", "Fan Speed RPM.", sensorLabels),
 		"minTemp":     colPromDesc(sensorSubsystem, "minimum_operating_temperature_celsius", "Minimum Operating Temperature in Celsius.", sensorLabels),
@@ -66,7 +66,7 @@ func getSensorStats() ([]byte, error) {
 }
 
 func processSensorStats(ch chan<- prometheus.Metric, jsonSensorSum []byte) error {
-	var jsonSensors sensorData
+	var jsonSensors []sensorData
 
 	if err := json.Unmarshal(jsonSensorSum, &jsonSensors); err != nil {
 		return fmt.Errorf("cannot unmarshal sensor json: %s", err)
@@ -77,18 +77,10 @@ func processSensorStats(ch chan<- prometheus.Metric, jsonSensorSum []byte) error
 
 		if strings.ToLower(sensor.State) == "ok" {
 			newGauge(ch, sensorDesc["state"], 1.0, labels...)
-
-			if sensor.Type == "fan" {
-				newGauge(ch, sensorDesc["fanSpeed"], sensor.Input, labels...)
-				newGauge(ch, sensorDesc["minFanSpeed"], sensor.Min, labels...)
-				newGauge(ch, sensorDesc["maxFanSpeed"], sensor.Max, labels...)
-			}
-			if sensor.Type == "temp" {
-				newGauge(ch, sensorDesc["temp"], sensor.Input, labels...)
-				newGauge(ch, sensorDesc["minTemp"], sensor.Min, labels...)
-				newGauge(ch, sensorDesc["maxTemp"], sensor.Max, labels...)
-			}
-
+			sensorMetrics(ch, sensor, labels)
+		} else if strings.ToLower(sensor.State) == "high" {
+			newGauge(ch, sensorDesc["state"], 3.0, labels...)
+			sensorMetrics(ch, sensor, labels)
 		} else if strings.ToLower(sensor.State) == "absent" {
 			newGauge(ch, sensorDesc["state"], 2.0, labels...)
 		} else {
@@ -98,7 +90,20 @@ func processSensorStats(ch chan<- prometheus.Metric, jsonSensorSum []byte) error
 	return nil
 }
 
-type sensorData []struct {
+func sensorMetrics(ch chan<- prometheus.Metric, sensor sensorData, labels []string) {
+	if sensor.Type == "fan" {
+		newGauge(ch, sensorDesc["fanSpeed"], sensor.Input, labels...)
+		newGauge(ch, sensorDesc["minFanSpeed"], sensor.Min, labels...)
+		newGauge(ch, sensorDesc["maxFanSpeed"], sensor.Max, labels...)
+	}
+	if sensor.Type == "temp" {
+		newGauge(ch, sensorDesc["temp"], sensor.Input, labels...)
+		newGauge(ch, sensorDesc["minTemp"], sensor.Min, labels...)
+		newGauge(ch, sensorDesc["maxTemp"], sensor.Max, labels...)
+	}
+}
+
+type sensorData struct {
 	Name        string  `json:"name"`
 	Description string  `json:"description"`
 	State       string  `json:"state"`
